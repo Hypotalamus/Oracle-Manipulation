@@ -1,0 +1,5 @@
+.ipynb_checkpoints
+__pycache__
+notebooks/Logs
+notebooks/Opt
+notebooks/Train
