@@ -9,7 +9,7 @@ class Arbitrageur:
     def perform_arbitration(self):
         mngo_price = self.amm.get_price()
         delta_price = mngo_price - self.ext_mngo_price
-        new_price = self.ext_mngo_price + self.efficiency * delta_price
+        new_price = self.ext_mngo_price + (1 - self.efficiency) * delta_price
         mngo_balance = self.amm.mngo_balance
         usdc_balance = self.amm.usdc_balance
         k = mngo_balance * usdc_balance 

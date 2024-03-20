@@ -6,7 +6,7 @@ from environment.amm import AMM
 from environment.arbitrageur import Arbitrageur
 from environment.protocol import Protocol
 from environment.action import Action
-from environment.action import ACTIONS_NUM, AMOUNT_ORDERS_HIGH
+from environment.action import ACTIONS_NUM, AMOUNT_ORDERS_HIGH, AMOUNT_REDUCED
 
 PENALTY = 0
 MAX_AMOUNT = 1e9
@@ -33,14 +33,8 @@ class MangoEnv(gymnasium.Env):
         # 3 - Repay to protocol + don't care
         # 4 - NOPE + don't care
         # 5 - Buy MNGO from external market
-        # stable-baselines3 doesn't support Tuple space. Doh! 
-        # self.action_space = spaces.Tuple(
-        #     (
-        #         spaces.Discrete(ACTIONS_NUM),
-        #         spaces.Box(AMOUNT_LOW, AMOUNT_HIGH, dtype=float)
-        #     )
-        # )
-        self.action_space = spaces.MultiDiscrete([ACTIONS_NUM, AMOUNT_ORDERS_HIGH], dtype=np.uint8)
+        # self.action_space = spaces.Discrete(ACTIONS_NUM * AMOUNT_ORDERS_HIGH)
+        self.action_space = spaces.Discrete( (ACTIONS_NUM - 2) * AMOUNT_REDUCED + 2)
 
         # State consists of:
         # - 1. External MNGO price
@@ -54,7 +48,7 @@ class MangoEnv(gymnasium.Env):
         #   could borrow)
         self.observation_space = spaces.Box(
             low=np.array(10 * [-10.0]),
-            high=np.array(10*[10.0]),
+            high=np.array(10 * [10.0]),
             dtype= np.float64
         )
 
@@ -122,12 +116,25 @@ class MangoEnv(gymnasium.Env):
         return self.usdc_user_balance + self.mngo_user_balance * self.ext_mngo_price
     
     def convert_action_rl_to_human(self, rl_action):
-        action_type, log_amount = rl_action
-        amount = 10.**(log_amount) / MAX_AMOUNT
+        if rl_action == 12:
+            action_type, log_amount = 3, 0 # repay
+        elif rl_action == 13:
+            action_type, log_amount = 4, 0 # nop
+        else:
+            action_type, log_amount = divmod(rl_action, 3)
+            if action_type == 3:
+                action_type = 5
+            if log_amount == 1:
+                log_amount = 6
+            elif log_amount == 2:
+                log_amount = 7
+        # action_type, log_amount = divmod(rl_action, AMOUNT_ORDERS_HIGH)
+        # action_type, log_amount = rl_action
+        amount = 10.**(log_amount + 1) / MAX_AMOUNT
         return (action_type, amount)
 
     def step(self, action):
-        if isinstance(action, np.ndarray):
+        if isinstance(action, np.int64):
             action_type, amount = self.convert_action_rl_to_human(action)
         else:
             action_type, amount = action
@@ -172,26 +179,22 @@ class MangoEnv(gymnasium.Env):
 
         self.arb.perform_arbitration()
         reward = 0
+        terminated = False
         health = self.mango.get_user_health_factor()
         if 1e1 * THRESHOLD_HEALTH <= health < THRESHOLD_HEALTH:
             reward = 0.05
-            init_treasury = self._mango_treasury_randomize()
-            self.mango.reset(init_treasury)
+            terminated = True
         elif 1e2 * THRESHOLD_HEALTH <= health < 1e1 * THRESHOLD_HEALTH:
             reward = 0.2
-            init_treasury = self._mango_treasury_randomize()
-            self.mango.reset(init_treasury)
+            terminated = True
         elif 1e3 * THRESHOLD_HEALTH <= health < 1e2 * THRESHOLD_HEALTH:
             reward = 2.0
-            init_treasury = self._mango_treasury_randomize()
-            self.mango.reset(init_treasury)
+            terminated = True
         elif health < 1e3 * THRESHOLD_HEALTH:
             reward = 10.0
-            init_treasury = self._mango_treasury_randomize()
-            self.mango.reset(init_treasury)
-        reward += penalty          
+            terminated = True
 
-        terminated = False
+        reward += penalty          
         observation = self._get_obs()
         info = self._get_info()
 

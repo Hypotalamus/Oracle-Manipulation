@@ -11,3 +11,4 @@ class Action(Enum):
 
 ACTIONS_NUM = len(Action)
 AMOUNT_ORDERS_HIGH = 8
+AMOUNT_REDUCED = 3
