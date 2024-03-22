@@ -8,9 +8,10 @@ from environment.protocol import Protocol
 from environment.action import Action
 from environment.action import ACTIONS_NUM, AMOUNT_ORDERS_HIGH, AMOUNT_REDUCED
 
-PENALTY = 0
+PENALTY = -0.5
 MAX_AMOUNT = 1e9
 THRESHOLD_HEALTH = -1e-5
+REDUCED = False
     
 class MangoEnv(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
@@ -24,7 +25,8 @@ class MangoEnv(gymnasium.Env):
                  mngo_collateral_factor=1.5,
                  arb_efficiency_factor=0.6,
                  usdc_user_balance_init=1e7 / MAX_AMOUNT,
-                 random_magnitude_pct = 0.1
+                 random_magnitude_pct = 0.1,
+                 seed=None
                  ):
         # Actions are dictionaries with the action type and some amount
         # 0 - Swap USDC to MNGO + amount of USDC to swap
@@ -33,8 +35,10 @@ class MangoEnv(gymnasium.Env):
         # 3 - Repay to protocol + don't care
         # 4 - NOPE + don't care
         # 5 - Buy MNGO from external market
-        # self.action_space = spaces.Discrete(ACTIONS_NUM * AMOUNT_ORDERS_HIGH)
-        self.action_space = spaces.Discrete( (ACTIONS_NUM - 2) * AMOUNT_REDUCED + 2)
+        if REDUCED:
+            self.action_space = spaces.Discrete( (ACTIONS_NUM - 2) * AMOUNT_REDUCED + 2)
+        else:
+            self.action_space = spaces.Discrete((ACTIONS_NUM - 2) * AMOUNT_ORDERS_HIGH + 2)
 
         # State consists of:
         # - 1. External MNGO price
@@ -59,7 +63,7 @@ class MangoEnv(gymnasium.Env):
         self.ext_mngo_price_mean = ext_mngo_price_mean
         self.usdc_user_balance_init = usdc_user_balance_init
         self.random_magnitude_pct = random_magnitude_pct
-        self.reset()
+        self.reset(seed=seed)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -116,28 +120,36 @@ class MangoEnv(gymnasium.Env):
         return self.usdc_user_balance + self.mngo_user_balance * self.ext_mngo_price
     
     def convert_action_rl_to_human(self, rl_action):
-        if rl_action == 12:
-            action_type, log_amount = 3, 0 # repay
-        elif rl_action == 13:
-            action_type, log_amount = 4, 0 # nop
+        if REDUCED:
+            if rl_action == 12:
+                action_type, log_amount = 3, 0 # repay
+            elif rl_action == 13:
+                action_type, log_amount = 4, 0 # nop
+            else:
+                action_type, log_amount = divmod(rl_action, AMOUNT_REDUCED)
+                if action_type == 3:
+                    action_type = 5
+                if log_amount == 1:
+                    log_amount = 6
+                elif log_amount == 2:
+                    log_amount = 7
         else:
-            action_type, log_amount = divmod(rl_action, 3)
-            if action_type == 3:
-                action_type = 5
-            if log_amount == 1:
-                log_amount = 6
-            elif log_amount == 2:
-                log_amount = 7
-        # action_type, log_amount = divmod(rl_action, AMOUNT_ORDERS_HIGH)
-        # action_type, log_amount = rl_action
+            if rl_action == (ACTIONS_NUM - 2) * AMOUNT_ORDERS_HIGH:
+                action_type, log_amount = 3, 0 # repay
+            elif rl_action == (ACTIONS_NUM - 2) * AMOUNT_ORDERS_HIGH + 1:
+                action_type, log_amount = 4, 0 # nop
+            else:
+                action_type, log_amount = divmod(rl_action, AMOUNT_ORDERS_HIGH)
+                if action_type == 3:
+                    action_type = 5                
         amount = 10.**(log_amount + 1) / MAX_AMOUNT
         return (action_type, amount)
 
     def step(self, action):
-        if isinstance(action, np.int64):
-            action_type, amount = self.convert_action_rl_to_human(action)
-        else:
+        if isinstance(action, tuple):
             action_type, amount = action
+        else:
+            action_type, amount = self.convert_action_rl_to_human(action)            
 
         penalty = 0
         match Action(action_type):
@@ -168,7 +180,7 @@ class MangoEnv(gymnasium.Env):
                 else:
                     penalty = PENALTY                    
             case Action.NOP:
-                pass
+                penalty = PENALTY
             case Action.BUY_MNGO:
                 usdc_required = amount * self.ext_mngo_price
                 if self.usdc_user_balance >= usdc_required:                    
